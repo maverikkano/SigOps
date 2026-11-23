@@ -1,0 +1,103 @@
+// SigOps architecture model.
+//
+// All nine pipeline stages are present as elements. Only Ingestion is
+// decomposed into its implementation parts; the remaining stages are
+// placeholders that carry a one-line purpose and nothing else.
+
+model {
+  reader = person "Reader" {
+    summary "Subscribes to feeds and receives summaries"
+  }
+
+  pipeline = container "SigOps pipeline" {
+    ingestion = stage "Ingestion" {
+      #implemented
+      summary "Fetch RSS/Atom feeds and normalize entries to Article models"
+
+      feeds_toml = config_file "feeds.toml" {
+        technology "TOML"
+      }
+
+      api = http_api "HTTP API" {
+        technology "FastAPI"
+      }
+
+      ingestor = service "Ingestor" {
+        technology "Python"
+      }
+
+      fetcher = service "FeedFetcher" {
+        technology "httpx"
+      }
+
+      parser = service "Parser" {
+        technology "feedparser"
+      }
+    }
+
+    classification = stage "Classification" {
+      #planned
+      summary "Tag an article of interest from its title and description (Jev)"
+    }
+
+    persistence = stage "Persistence" {
+      #planned
+      summary "Write eligible articles to filesystem, NAS or blob storage"
+    }
+
+    chunking = stage "Chunk & Index" {
+      #planned
+      summary "Split article into text and image chunks and index each"
+    }
+
+    extraction = stage "Extraction" {
+      #planned
+      summary "Identify images, graphs, tables and entities"
+    }
+
+    summarization = stage "Summarization" {
+      #planned
+      summary "Summarize the article chunk-wise with an LLM"
+    }
+
+    templatization = stage "Templatization" {
+      #planned
+      summary "Render a template-based summary document (optional)"
+    }
+
+    semantic_index = stage "Semantic Indexing" {
+      #planned
+      summary "Add key findings to a RAG index from the summary document"
+    }
+
+    notify = stage "Notify" {
+      #planned
+      summary "Tell the reader that a summary document is ready"
+    }
+  }
+
+  rss = external_system "RSS / Atom feed"
+
+  // --- Ingestion, elaborated --------------------------------------------
+
+  api -> feeds_toml "reads config per request" { #implemented }
+  api -> ingestor "runs one pass" { #implemented }
+  ingestor -> fetcher "per feed" { #implemented }
+  ingestor -> parser "normalized bytes" { #implemented }
+  fetcher -> rss "HTTP GET" { #implemented }
+
+  // --- Pipeline, unelaborated -------------------------------------------
+  // Stages chain in order. Only the first hop leaves a real contract.
+
+  reader -> pipeline.api "POST /ingest" { #implemented }
+
+  ingestion -> classification "articles" { #implemented }
+  classification -> persistence "eligible articles"
+  persistence -> chunking "stored article"
+  chunking -> extraction "chunks"
+  extraction -> summarization "figures and entities"
+  summarization -> templatization "chunk summaries"
+  templatization -> semantic_index "summary document"
+  semantic_index -> notify "key findings"
+  notify -> reader "summary ready"
+}

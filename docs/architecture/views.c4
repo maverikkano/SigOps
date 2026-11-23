@@ -1,0 +1,58 @@
+// Views over the SigOps architecture model.
+//
+// `pipeline-overview` shows all nine stages, with implemented ones solid and
+// planned ones muted. `ingestion-detail` zooms into the one elaborated stage.
+
+views {
+  view pipeline-overview {
+    title "SigOps pipeline"
+    description """
+      Every stage of the pipeline from ARCHITECTURE.md. Ingestion is built;
+      the rest are placeholders.
+    """
+
+    include *
+    include * -> *
+    include * where tag is #planned with {
+      color muted
+      opacity 40%
+      border dashed
+    }
+  }
+
+  view ingestion-detail of pipeline.ingestion {
+    title "Ingestion — implementation"
+    description "How the first stage is built: FastAPI surface, orchestration, HTTP fetch and parse."
+
+    include *
+
+    style pipeline.ingestion { color green }
+  }
+
+  dynamic view ingestion-request {
+    title "POST /ingest"
+    description "What happens during one ingestion pass."
+
+    reader -> pipeline.api "POST /ingest"
+    pipeline.api -> pipeline.ingestion.feeds_toml "load_feeds(path)"
+    pipeline.api -> pipeline.ingestion.ingestor "Ingestor(feeds).run()"
+
+    loop "for each feed" {
+      pipeline.ingestion.ingestor -> pipeline.ingestion.fetcher "fetch(url)"
+      pipeline.ingestion.fetcher -> rss "HTTP GET"
+      pipeline.ingestion.fetcher <- rss "raw bytes"
+      pipeline.ingestion.ingestor -> pipeline.ingestion.parser "parse_articles(feed_id, raw)"
+
+      alt "feed failed" {
+        when "FetchError or ParseError" {
+          pipeline.ingestion.ingestor -> pipeline.ingestion.ingestor "append FeedFailure"
+        }
+        else "feed parsed" {
+          pipeline.ingestion.ingestor -> pipeline.ingestion.ingestor "extend articles"
+        }
+      }
+    }
+
+    reader <- pipeline.api "IngestionResult"
+  }
+}

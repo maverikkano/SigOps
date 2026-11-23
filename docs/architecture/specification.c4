@@ -1,0 +1,42 @@
+// Shared vocabulary for the SigOps pipeline.
+// Changes here re-parse the whole project, so keep it isolated.
+
+specification {
+  tag implemented
+  tag planned
+
+  element person {
+    title "Person"
+    style { shape person }
+  }
+
+  element container {
+    title "Container"
+    style { shape rectangle }
+  }
+
+  element stage {
+    title "Pipeline stage"
+    style { shape rectangle }
+  }
+
+  element service {
+    title "Service"
+    style { shape component }
+  }
+
+  element external_system {
+    title "External system"
+    style { shape rectangle; color sky }
+  }
+
+  element config_file {
+    title "Config file"
+    style { shape document }
+  }
+
+  element http_api {
+    title "HTTP API"
+    style { shape browser }
+  }
+}
