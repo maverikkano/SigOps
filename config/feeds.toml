@@ -1,0 +1,5 @@
+[feeds.techcrunch]
+url = "https://techcrunch.com/feed/"
+
+[feeds.hn]
+url = "https://hnrss.org/frontpage"
