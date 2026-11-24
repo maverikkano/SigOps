@@ -194,6 +194,19 @@ def test_unjudged_articles_never_match_queries(catalog: Catalog) -> None:
     assert catalog.find_by_eligibility(False) == []
 
 
+def test_unjudged_returns_only_unjudged(catalog: Catalog) -> None:
+    catalog.put(_article("a", "1"))
+    catalog.put(_article("a", "2"))
+    catalog.put_classification(_classification("a", "1"))
+    assert {a.article_id for a in catalog.unjudged()} == {"2"}
+
+
+def test_unjudged_empty_when_all_judged(catalog: Catalog) -> None:
+    catalog.put(_article("a", "1"))
+    catalog.put_classification(_classification("a", "1"))
+    assert catalog.unjudged() == []
+
+
 # --- Article stays tag-free -------------------------------------------------
 
 

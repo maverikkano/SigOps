@@ -124,6 +124,14 @@ class Catalog(Protocol):
         """
         ...
 
+    def unjudged(self) -> list[Article]:
+        """Return articles with no classification judgment yet.
+
+        Empty list when everything is judged. The classification stage
+        consumes this; re-judge is explicit, never default.
+        """
+        ...
+
 
 def _decode_article_row(row: tuple) -> Article:
     try:
@@ -429,6 +437,33 @@ class SqliteCatalog:
         except (sqlite3.Error, OSError) as e:
             raise CatalogError(f"catalog read failed: {e}") from e
 
+    def unjudged(self) -> list[Article]:
+        """Return articles with no classification row yet."""
+        try:
+            if not self._db_exists():
+                return []
+            conn = self._open()
+            try:
+                try:
+                    rows = conn.execute(
+                        "SELECT a.feed_id, a.article_id, a.title, a.link,"
+                        " a.summary, a.published_at, a.fetched_at"
+                        " FROM articles a"
+                        " LEFT JOIN classifications c"
+                        " ON a.feed_id = c.feed_id"
+                        " AND a.article_id = c.article_id"
+                        " WHERE c.feed_id IS NULL"
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    return []
+                return [_decode_article_row(tuple(row)) for row in rows]
+            finally:
+                self._close(conn)
+        except CatalogError:
+            raise
+        except (sqlite3.Error, OSError) as e:
+            raise CatalogError(f"catalog read failed: {e}") from e
+
 
 class MemoryCatalog:
     """In-memory Catalog fake for tests. Same Protocol semantics, no I/O."""
@@ -484,3 +519,11 @@ class MemoryCatalog:
                 if article is not None:
                     out.append(article.model_copy(deep=True))
         return out
+
+    def unjudged(self) -> list[Article]:
+        """Stored articles with no judgment yet."""
+        return [
+            article.model_copy(deep=True)
+            for key, article in self._articles.items()
+            if key not in self._judgments
+        ]
