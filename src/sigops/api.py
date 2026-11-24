@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
+from pydantic import BaseModel, Field
 
 from sigops.catalog import Catalog, SqliteCatalog
 from sigops.classifier import (
@@ -16,12 +17,16 @@ from sigops.classifier import (
 )
 from sigops.config import load_feeds
 from sigops.ingestor import Ingestor
-from sigops.models import Classification, ClassificationFailure, FeedSource, IngestionResult
+from sigops.models import (
+    ArticleFailure,
+    Classification,
+    ClassificationFailure,
+    FeedFailure,
+    FeedSource,
+    IngestionResult,
+)
 
 DEFAULT_FEEDS_PATH = Path(__file__).resolve().parents[2] / "config" / "feeds.toml"
-
-
-from pydantic import BaseModel, Field
 
 
 class ClassifyResult(BaseModel):
@@ -29,6 +34,38 @@ class ClassifyResult(BaseModel):
 
     judgments: list[Classification] = Field(default_factory=list)
     failures: list[ClassificationFailure] = Field(default_factory=list)
+
+
+class PipelineResult(BaseModel):
+    """Outcome of one end-to-end pipeline run (`POST /run`).
+
+    The user-facing entry point. Aggregates every stage run so far;
+    forthcoming stages append their own fields here.
+    """
+
+    articles: list = Field(default_factory=list)
+    failures: list[FeedFailure] = Field(default_factory=list)
+    article_failures: list[ArticleFailure] = Field(default_factory=list)
+    judgments: list[Classification] = Field(default_factory=list)
+    classification_failures: list[ClassificationFailure] = Field(
+        default_factory=list
+    )
+
+
+def run_ingest(feeds_path: Path, catalog: Catalog) -> IngestionResult:
+    """Fetch, parse, and catalog one pass. Pure stage logic, no HTTP."""
+    return Ingestor(load_feeds(feeds_path), catalog=catalog).run()
+
+
+def run_classify(
+    catalog: Catalog, judge: Judge, tags_path: Path | None
+) -> ClassifyResult:
+    """Judge every unjudged article and write back. Pure stage logic, no HTTP."""
+    vocabulary = load_tags(tags_path or DEFAULT_TAGS_PATH)
+    judgments, failures = classify_unjudged(
+        catalog, catalog.unjudged(), vocabulary, judge
+    )
+    return ClassifyResult(judgments=judgments, failures=failures)
 
 
 def create_app(
@@ -60,19 +97,29 @@ def create_app(
 
     @app.post("/ingest", response_model=IngestionResult)
     def ingest() -> IngestionResult:
-        """Run one ingestion pass over the configured feeds."""
-        return Ingestor(load_feeds(path), catalog=catalog).run()
+        """Run one ingestion pass. Standalone stage endpoint (testing)."""
+        return run_ingest(path, _catalog())
 
     @app.post("/classify", response_model=ClassifyResult)
     def classify() -> ClassifyResult:
-        """Judge every unjudged cataloged article and write back."""
+        """Judge every unjudged cataloged article. Standalone stage endpoint."""
+        return run_classify(_catalog(), judge or JevJudge(), tags_path)
+
+    @app.post("/run", response_model=PipelineResult)
+    def run() -> PipelineResult:
+        """Run the full pipeline end to end. The user-facing endpoint."""
         active_catalog = _catalog()
-        vocabulary = load_tags(tags_path or DEFAULT_TAGS_PATH)
-        active_judge: Judge = judge or JevJudge()
-        judgments, failures = classify_unjudged(
-            active_catalog, active_catalog.unjudged(), vocabulary, active_judge
+        ingestion = run_ingest(path, active_catalog)
+        classification = run_classify(
+            active_catalog, judge or JevJudge(), tags_path
         )
-        return ClassifyResult(judgments=judgments, failures=failures)
+        return PipelineResult(
+            articles=ingestion.articles,
+            failures=ingestion.failures,
+            article_failures=ingestion.article_failures,
+            judgments=classification.judgments,
+            classification_failures=classification.failures,
+        )
 
     return app
 
