@@ -10,7 +10,7 @@ from pathlib import Path
 from sigops.models import Article, IngestionResult
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-LOCAL_PATH = PROJECT_ROOT / ".sigops" / "seen.json"
+LOCAL_PATH = PROJECT_ROOT / "data" / "seen.json"
 
 class StoreError(RuntimeError):
     """Raised when the seen-state file exists but cannot be read."""

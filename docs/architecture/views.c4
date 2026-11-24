@@ -1,6 +1,6 @@
 // Views over the SigOps architecture model.
 //
-// `pipeline-overview` shows all nine stages, with implemented ones solid and
+// `pipeline-overview` shows every stage, with implemented ones solid and
 // planned ones muted. `ingestion-detail` zooms into the one elaborated stage.
 
 views {
@@ -8,16 +8,31 @@ views {
     title "SigOps pipeline"
     description """
       Every stage of the pipeline from ARCHITECTURE.md. Ingestion is built;
-      the rest are placeholders.
+      Catalog is the next stage to land; the rest are placeholders.
     """
 
     include *
     include * -> *
-    include * where tag is #planned with {
-      color muted
-      opacity 40%
-      border dashed
-    }
+    include
+      * where tag is #planned with {
+        color muted
+        opacity 40%
+        border dashed
+      }
+  }
+
+  view catalog-detail of pipeline.catalog {
+    title "Catalog — planned shape"
+    description """
+      The database is an index over articles, not a replacement for the files.
+      Files are the product; the catalog exists so classification can be
+      recomputed and so articles can be found by tag or eligibility.
+    """
+
+    include *
+    include * -> *
+
+    style pipeline.catalog { color amber }
   }
 
   view ingestion-detail of pipeline.ingestion {
@@ -52,6 +67,9 @@ views {
         }
       }
     }
+
+    pipeline.ingestion.ingestor -> pipeline.catalog.catalog_service "record(articles)"
+    pipeline.catalog.catalog_service -> pipeline.catalog.state_db "INSERT OR IGNORE"
 
     reader <- pipeline.api "IngestionResult"
   }

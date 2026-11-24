@@ -1,8 +1,8 @@
 // SigOps architecture model.
 //
-// All nine pipeline stages are present as elements. Only Ingestion is
-// decomposed into its implementation parts; the remaining stages are
-// placeholders that carry a one-line purpose and nothing else.
+// Every pipeline stage is present as an element. Only Ingestion and Catalog are
+// decomposed into implementation parts; the remaining stages are placeholders
+// that carry a one-line purpose and nothing else.
 
 model {
   reader = person "Reader" {
@@ -32,6 +32,21 @@ model {
 
       parser = service "Parser" {
         technology "feedparser"
+      }
+    }
+
+    catalog = stage "Catalog" {
+      #planned
+      summary "Record every ingested article in a durable index, keyed by feed and article id"
+
+      state_db = config_file "sigops.db" {
+        technology "SQLite"
+        summary "Article metadata and the classification judgment"
+      }
+
+      catalog_service = service "Catalog" {
+        technology "Python"
+        summary "Upsert articles, read them back, find by tag or eligibility"
       }
     }
 
@@ -91,7 +106,8 @@ model {
 
   reader -> pipeline.api "POST /ingest" { #implemented }
 
-  ingestion -> classification "articles" { #implemented }
+  ingestion -> catalog "articles" { #implemented }
+  catalog -> classification "article rows"
   classification -> persistence "eligible articles"
   persistence -> chunking "stored article"
   chunking -> extraction "chunks"
