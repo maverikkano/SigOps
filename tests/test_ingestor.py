@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import httpx
 import pytest
 
+from sigops.catalog import MemoryCatalog
 from sigops.fetcher import FeedFetcher
 from sigops.ingestor import Ingestor
 from sigops.models import FeedSource
-from sigops.store import SeenStore
 from tests import fixtures
 
 
@@ -22,16 +20,12 @@ def _fetcher(mapping: dict[str, httpx.Response]) -> FeedFetcher:
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> SeenStore:
-    """A seen-store confined to this test.
-
-    `Ingestor` defaults to the on-disk store, so every test must inject one or
-    it would record fixture ids in the repo and filter them out of later runs.
-    """
-    return SeenStore(tmp_path / "seen.json")
+def store() -> MemoryCatalog:
+    """An empty in-memory catalog confined to this test."""
+    return MemoryCatalog()
 
 
-def test_collects_articles_from_all_feeds(store: SeenStore) -> None:
+def test_collects_articles_from_all_feeds(store: MemoryCatalog) -> None:
     feeds = [
         FeedSource(feed_id="a", url="https://e.com/a"),
         FeedSource(feed_id="b", url="https://e.com/b"),
@@ -48,7 +42,7 @@ def test_collects_articles_from_all_feeds(store: SeenStore) -> None:
     assert result.failures == []
 
 
-def test_one_failing_feed_does_not_stop_others(store: SeenStore) -> None:
+def test_one_failing_feed_does_not_stop_others(store: MemoryCatalog) -> None:
     feeds = [
         FeedSource(feed_id="bad", url="https://e.com/bad"),
         FeedSource(feed_id="good", url="https://e.com/good"),
@@ -65,7 +59,7 @@ def test_one_failing_feed_does_not_stop_others(store: SeenStore) -> None:
     assert result.failures[0].feed_id == "bad"
 
 
-def test_parse_failure_recorded_per_feed(store: SeenStore) -> None:
+def test_parse_failure_recorded_per_feed(store: MemoryCatalog) -> None:
     feeds = [FeedSource(feed_id="junk", url="https://e.com/junk")]
     fetcher = _fetcher({"https://e.com/junk": httpx.Response(200, content=fixtures.NOT_A_FEED)})
     result = Ingestor(feeds, fetcher, store).run()
@@ -74,13 +68,13 @@ def test_parse_failure_recorded_per_feed(store: SeenStore) -> None:
     assert result.failures[0].feed_id == "junk"
 
 
-def test_empty_feed_list_yields_empty_result(store: SeenStore) -> None:
+def test_empty_feed_list_yields_empty_result(store: MemoryCatalog) -> None:
     result = Ingestor([], _fetcher({}), store).run()
     assert result.articles == []
     assert result.failures == []
 
 
-def test_second_run_returns_only_new_articles(store: SeenStore) -> None:
+def test_second_run_returns_only_new_articles(store: MemoryCatalog) -> None:
     """A repeated run over unchanged feeds yields nothing; a new item still arrives."""
     feeds = [FeedSource(feed_id="a", url="https://e.com/a")]
     fetcher = _fetcher(
@@ -95,7 +89,7 @@ def test_second_run_returns_only_new_articles(store: SeenStore) -> None:
     assert second.failures == []
 
 
-def test_new_item_after_first_run_is_returned(store: SeenStore) -> None:
+def test_new_item_after_first_run_is_returned(store: MemoryCatalog) -> None:
     feeds = [FeedSource(feed_id="a", url="https://e.com/a")]
 
     Ingestor(

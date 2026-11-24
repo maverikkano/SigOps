@@ -27,7 +27,7 @@ def test_get_feeds_returns_configured_sources(feeds_file: Path) -> None:
 
 def test_ingest_endpoint_returns_result(feeds_file: Path, monkeypatch) -> None:
     class StubIngestor:
-        def __init__(self, feeds: list[FeedSource], fetcher=None) -> None:
+        def __init__(self, feeds: list[FeedSource], fetcher=None, catalog=None) -> None:
             self.feeds = feeds
 
         def run(self) -> IngestionResult:
@@ -56,7 +56,7 @@ def test_ingest_reports_failures(feeds_file: Path, monkeypatch) -> None:
     from sigops.models import FeedFailure
 
     class StubIngestor:
-        def __init__(self, feeds: list[FeedSource], fetcher=None) -> None:
+        def __init__(self, feeds: list[FeedSource], fetcher=None, catalog=None) -> None:
             pass
 
         def run(self) -> IngestionResult:
