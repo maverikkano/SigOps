@@ -56,3 +56,26 @@ ATOM_FEED = b"""<?xml version="1.0" encoding="utf-8"?>
   </entry>
 </feed>
 """
+
+RSS_ONE_NEW_ITEM = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example Feed</title>
+    <link>https://example.com</link>
+    <item>
+      <title>First Post</title>
+      <link>https://example.com/first</link>
+      <guid>guid-1</guid>
+      <pubDate>Sat, 22 Nov 2025 10:00:00 GMT</pubDate>
+      <description>First summary</description>
+    </item>
+    <item>
+      <title>Third Post</title>
+      <link>https://example.com/third</link>
+      <guid>guid-3</guid>
+      <pubDate>Mon, 24 Nov 2025 09:00:00 GMT</pubDate>
+      <description>Third summary</description>
+    </item>
+  </channel>
+</rss>
+"""

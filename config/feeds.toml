@@ -3,3 +3,6 @@ url = "https://techcrunch.com/feed/"
 
 [feeds.hn]
 url = "https://hnrss.org/frontpage"
+
+[feeds.aftermarket-report]
+url =  "https://aftermarketreport.zerodha.com/feed"
