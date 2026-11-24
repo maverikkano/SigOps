@@ -162,3 +162,47 @@ def test_classify_endpoint_skips_judged(tmp_path: Path) -> None:
     resp = client.post("/classify")
     assert resp.status_code == 200
     assert resp.json()["judgments"] == []
+
+
+def test_run_endpoint_runs_ingest_then_classify(tmp_path: Path) -> None:
+    import json
+    from datetime import datetime, timezone
+
+    from sigops.catalog import MemoryCatalog
+    from sigops.models import Classification
+
+    catalog = MemoryCatalog()
+    catalog.put(
+        Article(feed_id="a", article_id="1", title="T", link="https://e.com/1")
+    )
+    tags_file = tmp_path / "tags.json"
+    tags_file.write_text(json.dumps({"tags": ["AI-LLM"]}), encoding="utf-8")
+    feeds_file = tmp_path / "feeds.toml"
+    feeds_file.write_text('[feeds.a]\nurl = "https://e.com/a"\n', encoding="utf-8")
+
+    class FakeJudge:
+        model_name = "fake-jev"
+
+        def judge(self, article, vocabulary):
+            return Classification(
+                feed_id=article.feed_id,
+                article_id=article.article_id,
+                tags=["AI-LLM"],
+                probabilities={"AI-LLM": 0.9},
+                eligible=True,
+                judge_model=self.model_name,
+                judged_at=datetime(2025, 11, 24, 12, 0, tzinfo=timezone.utc),
+            )
+
+    client = TestClient(
+        api.create_app(
+            feeds_file, catalog=catalog, judge=FakeJudge(), tags_path=tags_file
+        )
+    )
+    resp = client.post("/run")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["judgments"]) == 1
+    assert body["judgments"][0]["tags"] == ["AI-LLM"]
+    assert body["classification_failures"] == []
+    assert catalog.get_classification("a", "1") is not None
