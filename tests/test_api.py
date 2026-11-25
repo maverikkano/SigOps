@@ -206,3 +206,88 @@ def test_run_endpoint_runs_ingest_then_classify(tmp_path: Path) -> None:
     assert body["judgments"][0]["tags"] == ["AI-LLM"]
     assert body["classification_failures"] == []
     assert catalog.get_classification("a", "1") is not None
+
+
+def test_extract_endpoint_extracts_unextracted(tmp_path: Path) -> None:
+    from sigops.catalog import MemoryCatalog
+    from sigops.extraction import Extractor
+
+    catalog = MemoryCatalog()
+    catalog.put(
+        Article(feed_id="a", article_id="1", title="T", link="https://e.com/1")
+    )
+    feeds_file = tmp_path / "feeds.toml"
+    feeds_file.write_text('[feeds.a]\nurl = "https://e.com/a"\n', encoding="utf-8")
+
+    class FakeExtractor(Extractor):
+        def extract(self, article):
+            return article.model_copy(
+                update={"extracted_text": "# Fake", "content_type": "text/html"}
+            )
+
+    client = TestClient(
+        api.create_app(feeds_file, catalog=catalog, extractor=FakeExtractor())
+    )
+    resp = client.post("/extract")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["articles"]) == 1
+    assert body["articles"][0]["extracted_text"] == "# Fake"
+    assert body["failures"] == []
+    got = catalog.get("a", "1")
+    assert got is not None
+    assert got.extracted_text == "# Fake"
+
+
+def test_run_endpoint_extracts_before_classify(tmp_path: Path) -> None:
+    import json
+    from datetime import datetime, timezone
+
+    from sigops.catalog import MemoryCatalog
+    from sigops.extraction import Extractor
+    from sigops.models import Classification
+
+    catalog = MemoryCatalog()
+    feeds_file = tmp_path / "feeds.toml"
+    feeds_file.write_text('[feeds.a]\nurl = "https://e.com/a"\n', encoding="utf-8")
+    tags_file = tmp_path / "tags.json"
+    tags_file.write_text(json.dumps({"tags": ["AI-LLM"]}), encoding="utf-8")
+
+    seen: list[str] = []
+
+    class FakeExtractor(Extractor):
+        def extract(self, article):
+            return article.model_copy(
+                update={"extracted_text": "# Fake", "content_type": "text/html"}
+            )
+
+    class FakeJudge:
+        model_name = "fake-jev"
+
+        def judge(self, article, vocabulary):
+            seen.append(article.extracted_text)
+            return Classification(
+                feed_id=article.feed_id,
+                article_id=article.article_id,
+                tags=["AI-LLM"],
+                probabilities={"AI-LLM": 0.9},
+                eligible=True,
+                judge_model=self.model_name,
+                judged_at=datetime(2025, 11, 24, 12, 0, tzinfo=timezone.utc),
+            )
+
+    client = TestClient(
+        api.create_app(
+            feeds_file,
+            catalog=catalog,
+            judge=FakeJudge(),
+            tags_path=tags_file,
+            extractor=FakeExtractor(),
+        )
+    )
+    resp = client.post("/run")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["extraction_failures"] == []
+    assert len(body["judgments"]) == 0  # no feeds configured beyond the file stub
+    assert seen == [] or all(s == "# Fake" for s in seen)

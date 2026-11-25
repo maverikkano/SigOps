@@ -2,7 +2,7 @@
 
 Decides, per article, whether it is of interest, and attaches the tags
 that say why. The judgment comes from title + description alone
-(classification runs before the body is fetched).
+(classification runs before extraction).
 
 Decisions:
 - Judge is Jev (TypeSafe System One) via the `typesafe-sdk` package.

@@ -19,6 +19,9 @@ class Article(BaseModel):
 
     `article_id` is stable across fetches: prefer the feed's guid/id, else link.
     `published_at` is None when the feed omits a parsable date.
+    `extracted_text` is the extracted article text as Markdown (issue #2);
+    empty means not yet extracted. `content_type` records the response MIME
+    type seen at fetch time; empty means unknown.
     """
 
     feed_id: str
@@ -27,6 +30,8 @@ class Article(BaseModel):
     link: str
     summary: str = ""
     published_at: datetime | None = None
+    extracted_text: str = ""
+    content_type: str = ""
 
 
 class FeedFailure(BaseModel):
@@ -78,14 +83,31 @@ class ClassificationFailure(BaseModel):
     reason: str
 
 
+class ExtractionFailure(BaseModel):
+    """An article whose text could not be fetched or extracted.
+
+    Failure isolation: paywalls, redirects, non-HTML content types, and
+    near-empty pages become a recorded failure per article, never an
+    exception that ends the run. Mirrors ArticleFailure but for the
+    extraction step rather than the catalog insert.
+    """
+
+    feed_id: str
+    article_id: str
+    reason: str
+
+
 class IngestionResult(BaseModel):
     """Outcome of one ingestion run.
 
     `articles` holds every entry from every successful feed.
     `failures` holds one entry per feed that errored.
     `article_failures` holds one entry per article whose catalog write failed.
+    `extraction_failures` holds one entry per article whose fetch or
+    extraction failed (issue #2).
     """
 
     articles: list[Article] = Field(default_factory=list)
     failures: list[FeedFailure] = Field(default_factory=list)
     article_failures: list[ArticleFailure] = Field(default_factory=list)
+    extraction_failures: list[ExtractionFailure] = Field(default_factory=list)

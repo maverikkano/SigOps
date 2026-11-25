@@ -34,13 +34,15 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "state" / "sigops.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
-  feed_id      TEXT NOT NULL,
-  article_id   TEXT NOT NULL,
-  title        TEXT NOT NULL,
-  link         TEXT NOT NULL,
-  summary      TEXT NOT NULL DEFAULT '',
-  published_at TEXT,
-  fetched_at   TEXT NOT NULL,
+  feed_id        TEXT NOT NULL,
+  article_id     TEXT NOT NULL,
+  title          TEXT NOT NULL,
+  link           TEXT NOT NULL,
+  summary        TEXT NOT NULL DEFAULT '',
+  published_at   TEXT,
+  fetched_at     TEXT NOT NULL,
+  extracted_text TEXT NOT NULL DEFAULT '',
+  content_type   TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (feed_id, article_id)
 );
 
@@ -57,6 +59,12 @@ CREATE TABLE IF NOT EXISTS classifications (
 );
 """
 """DDL for state/sigops.db. Composite PK mirrors per-feed id scoping."""
+
+MIGRATE_ARTICLES_EXTRACTION = """
+ALTER TABLE articles ADD COLUMN extracted_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE articles ADD COLUMN content_type TEXT NOT NULL DEFAULT '';
+"""
+"""Guarded column adds; applied only when the columns are missing."""
 
 
 class CatalogError(RuntimeError):
@@ -132,10 +140,29 @@ class Catalog(Protocol):
         """
         ...
 
+    def unextracted(self) -> list[Article]:
+        """Return articles with no extracted text yet.
+
+        Empty list when everything is extracted. The extraction stage
+        consumes this; re-extract is explicit, never default.
+        """
+        ...
+
+    def update_extraction(self, article: Article) -> None:
+        """Write back `article`'s extracted text and content type.
+
+        Row must already exist (ingest writes the row first); raises
+        CatalogError otherwise. Overwrites any prior extraction.
+        """
+        ...
+
 
 def _decode_article_row(row: tuple) -> Article:
     try:
-        feed_id, article_id, title, link, summary, published_at, fetched_at = row
+        (
+            feed_id, article_id, title, link, summary,
+            published_at, fetched_at, extracted_text, content_type,
+        ) = row
         if not all(
             isinstance(v, str)
             for v in (feed_id, article_id, title, link, summary)
@@ -147,6 +174,8 @@ def _decode_article_row(row: tuple) -> Article:
         if published_at is not None and not isinstance(published, datetime):
             raise CatalogError(f"malformed published_at: {published_at!r}")
         datetime.fromisoformat(fetched_at)
+        if not isinstance(extracted_text, str) or not isinstance(content_type, str):
+            raise CatalogError(f"malformed extraction columns: {row!r}")
         return Article(
             feed_id=feed_id,
             article_id=article_id,
@@ -154,11 +183,21 @@ def _decode_article_row(row: tuple) -> Article:
             link=link,
             summary=summary,
             published_at=published,
+            extracted_text=extracted_text,
+            content_type=content_type,
         )
     except CatalogError:
         raise
     except Exception as e:
         raise CatalogError(f"malformed article row: {row!r}: {e}") from e
+
+
+ARTICLE_COLUMNS = (
+    "a.feed_id, a.article_id, a.title, a.link,"
+    " a.summary, a.published_at, a.fetched_at,"
+    " a.extracted_text, a.content_type"
+)
+"""Article columns shared by every SELECT that decodes to Article."""
 
 
 def _decode_classification_row(row: tuple) -> Classification:
@@ -227,6 +266,21 @@ class SqliteCatalog:
             return self._mem_conn is not None
         return Path(self._path).exists()
 
+    def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        """Create tables and migrate old DBs to the current schema."""
+        conn.executescript(SCHEMA)
+        cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(articles)").fetchall()
+        }
+        for statement in MIGRATE_ARTICLES_EXTRACTION.strip().split(";"):
+            statement = statement.strip()
+            if not statement:
+                continue
+            column = statement.split("ADD COLUMN", 1)[1].split()[0]
+            if column not in cols:
+                conn.execute(statement)
+
     def put(self, article: Article) -> bool:
         """INSERT OR IGNORE one article row; True if new, False if existed."""
         try:
@@ -234,7 +288,7 @@ class SqliteCatalog:
                 Path(self._path).parent.mkdir(parents=True, exist_ok=True)
             conn = self._open()
             try:
-                conn.executescript(SCHEMA)
+                self._ensure_schema(conn)
                 fetched_at = datetime.now(timezone.utc).isoformat()
                 published = (
                     article.published_at.isoformat()
@@ -244,8 +298,8 @@ class SqliteCatalog:
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO articles"
                     " (feed_id, article_id, title, link, summary,"
-                    " published_at, fetched_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    " published_at, fetched_at, extracted_text, content_type)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         article.feed_id,
                         article.article_id,
@@ -254,6 +308,8 @@ class SqliteCatalog:
                         article.summary,
                         published,
                         fetched_at,
+                        article.extracted_text,
+                        article.content_type,
                     ),
                 )
                 conn.commit()
@@ -270,10 +326,13 @@ class SqliteCatalog:
                 return None
             conn = self._open()
             try:
+                self._ensure_schema(conn)
+                conn.commit()
                 try:
                     cur = conn.execute(
                         "SELECT feed_id, article_id, title, link, summary,"
-                        " published_at, fetched_at FROM articles"
+                        " published_at, fetched_at, extracted_text, content_type"
+                        " FROM articles"
                         " WHERE feed_id = ? AND article_id = ?",
                         (feed_id, article_id),
                     )
@@ -297,7 +356,7 @@ class SqliteCatalog:
                 Path(self._path).parent.mkdir(parents=True, exist_ok=True)
             conn = self._open()
             try:
-                conn.executescript(SCHEMA)
+                self._ensure_schema(conn)
                 exists = conn.execute(
                     "SELECT 1 FROM articles WHERE feed_id = ? AND article_id = ?",
                     (classification.feed_id, classification.article_id),
@@ -381,8 +440,7 @@ class SqliteCatalog:
             try:
                 try:
                     rows = conn.execute(
-                        "SELECT a.feed_id, a.article_id, a.title, a.link,"
-                        " a.summary, a.published_at, a.fetched_at, c.tags"
+                        f"SELECT {ARTICLE_COLUMNS}, c.tags"
                         " FROM articles a"
                         " JOIN classifications c"
                         " ON a.feed_id = c.feed_id"
@@ -418,8 +476,7 @@ class SqliteCatalog:
             try:
                 try:
                     rows = conn.execute(
-                        "SELECT a.feed_id, a.article_id, a.title, a.link,"
-                        " a.summary, a.published_at, a.fetched_at"
+                        f"SELECT {ARTICLE_COLUMNS}"
                         " FROM articles a"
                         " JOIN classifications c"
                         " ON a.feed_id = c.feed_id"
@@ -446,8 +503,7 @@ class SqliteCatalog:
             try:
                 try:
                     rows = conn.execute(
-                        "SELECT a.feed_id, a.article_id, a.title, a.link,"
-                        " a.summary, a.published_at, a.fetched_at"
+                        f"SELECT {ARTICLE_COLUMNS}"
                         " FROM articles a"
                         " LEFT JOIN classifications c"
                         " ON a.feed_id = c.feed_id"
@@ -463,6 +519,61 @@ class SqliteCatalog:
             raise
         except (sqlite3.Error, OSError) as e:
             raise CatalogError(f"catalog read failed: {e}") from e
+
+    def unextracted(self) -> list[Article]:
+        """Return articles with no extracted text yet."""
+        try:
+            if not self._db_exists():
+                return []
+            conn = self._open()
+            try:
+                try:
+                    rows = conn.execute(
+                        "SELECT feed_id, article_id, title, link, summary,"
+                        " published_at, fetched_at, extracted_text, content_type"
+                        " FROM articles"
+                        " WHERE extracted_text = ''"
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    return []
+                return [_decode_article_row(tuple(row)) for row in rows]
+            finally:
+                self._close(conn)
+        except CatalogError:
+            raise
+        except (sqlite3.Error, OSError) as e:
+            raise CatalogError(f"catalog read failed: {e}") from e
+
+    def update_extraction(self, article: Article) -> None:
+        """Write back extracted text and content type for an existing row."""
+        try:
+            if not self._is_memory():
+                Path(self._path).parent.mkdir(parents=True, exist_ok=True)
+            conn = self._open()
+            try:
+                self._ensure_schema(conn)
+                cur = conn.execute(
+                    "UPDATE articles SET extracted_text = ?, content_type = ?"
+                    " WHERE feed_id = ? AND article_id = ?",
+                    (
+                        article.extracted_text,
+                        article.content_type,
+                        article.feed_id,
+                        article.article_id,
+                    ),
+                )
+                if cur.rowcount == 0:
+                    raise CatalogError(
+                        f"no article row for"
+                        f" ({article.feed_id!r}, {article.article_id!r})"
+                    )
+                conn.commit()
+            finally:
+                self._close(conn)
+        except CatalogError:
+            raise
+        except (sqlite3.Error, OSError) as e:
+            raise CatalogError(f"catalog write failed: {e}") from e
 
 
 class MemoryCatalog:
@@ -527,3 +638,20 @@ class MemoryCatalog:
             for key, article in self._articles.items()
             if key not in self._judgments
         ]
+
+    def unextracted(self) -> list[Article]:
+        """Stored articles with no extracted text yet."""
+        return [
+            article.model_copy(deep=True)
+            for article in self._articles.values()
+            if not article.extracted_text
+        ]
+
+    def update_extraction(self, article: Article) -> None:
+        """Write back extracted text and content type for an existing row."""
+        key = (article.feed_id, article.article_id)
+        if key not in self._articles:
+            raise CatalogError(f"no article row for {key!r}")
+        stored = self._articles[key]
+        stored.extracted_text = article.extracted_text
+        stored.content_type = article.content_type
