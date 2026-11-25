@@ -126,6 +126,13 @@ yields new ones. The store is a hand-inspectable JSON file at
 | `state/` | Generated state, gitignored. Will hold `sigops.db` once Catalog lands |
 | `docs/` | Architecture and intent notes; `docs/architecture/` holds the LikeC4 model |
 
+## Known blindspots
+
+- **HTML → Markdown is lossy.** Extraction converts high-resolution HTML to
+  lower-resolution Markdown: exact layout, styling, interactive elements, and
+  image binaries are dropped (image/link URLs are kept, binaries never
+  fetched). Downstream stages see the Markdown, never the original page.
+
 ## Troubleshooting
 
 - **`uv: command not found`** — install uv: `brew install uv`.

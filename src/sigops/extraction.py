@@ -50,8 +50,10 @@ def extract_text(html: str | bytes) -> str:
     """Convert an HTML document to readable Markdown prose.
 
     Strips nav, footer, scripts, and styles; keeps semantic structure
-    (headings, lists, tables) as Markdown. Input is the raw response
-    body; encoding is detected from the markup.
+    (headings, lists, tables, image links, hyperlinks) as Markdown.
+    Image binaries are never fetched; `![alt](src)` links preserve the
+    source URL for the later chunk/index stages. Input is the raw
+    response body; encoding is detected from the markup.
 
     Returns the Markdown string. Raises ExtractionError when the document
     yields no meaningful text (below MIN_TEXT_CHARS after stripping).
@@ -63,7 +65,8 @@ def extract_text(html: str | bytes) -> str:
             output_format="markdown",
             include_comments=False,
             include_tables=True,
-            include_links=False,
+            include_images=True,
+            include_links=True,
         )
     except Exception as e:
         raise ExtractionError(f"extraction failed: {e}") from e
@@ -117,7 +120,8 @@ class Extractor:
                 output_format="markdown",
                 include_comments=False,
                 include_tables=True,
-                include_links=False,
+                include_images=True,
+                include_links=True,
             )
         except Exception as e:
             raise ExtractionError(f"extraction failed: {e}") from e

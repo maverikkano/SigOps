@@ -1,7 +1,16 @@
 # Architecture
 ```plain text
-Ingestion -> Catalog -> Classification (Jev) -> Persistence -> Chunk & Index (both text & images) -> Extraction -> Summarization -> Templatization (optional) -> Symantic Indexing -> Notify
+Ingestion -> Catalog ->  Extraction -> Classification (Jev)  -> Chunk & Index (both text & images) -> OCR (images) -> Summarization -> Templatization (optional) -> Symantic Indexing -> Notify
 ```
+
+## Known blindspots
+
+- **HTML → Markdown is lossy.** The Extraction stage converts high-resolution
+  HTML to lower-resolution Markdown. Exact layout, styling, interactive
+  elements, and image binaries are dropped; image/link URLs are kept, binaries
+  are never fetched. Chunk & Index, Summarization, and everything downstream
+  operate on the Markdown, never the original page. If a stage needs fidelity
+  the Markdown cannot carry, it must re-fetch the article URL itself.
 
 
 | Stage | Purpose |
