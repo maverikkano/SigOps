@@ -207,6 +207,52 @@ def test_unjudged_empty_when_all_judged(catalog: Catalog) -> None:
     assert catalog.unjudged() == []
 
 
+def test_extraction_roundtrip(catalog: Catalog) -> None:
+    catalog.put(_article("a", "1"))
+    got = catalog.get("a", "1")
+    assert got is not None
+    assert got.extracted_text == ""
+    assert got.content_type == ""
+    catalog.update_extraction(
+        Article(
+            feed_id="a", article_id="1", title="T", link="https://e.com/1",
+            extracted_text="# Hello", content_type="text/html",
+        )
+    )
+    got = catalog.get("a", "1")
+    assert got is not None
+    assert got.extracted_text == "# Hello"
+    assert got.content_type == "text/html"
+
+
+def test_update_extraction_missing_row_raises(catalog: Catalog) -> None:
+    with pytest.raises(CatalogError):
+        catalog.update_extraction(_article("a", "missing"))
+
+
+def test_unextracted_returns_only_missing(catalog: Catalog) -> None:
+    catalog.put(_article("a", "1"))
+    catalog.put(_article("a", "2"))
+    catalog.update_extraction(
+        Article(
+            feed_id="a", article_id="1", title="T", link="https://e.com/1",
+            extracted_text="# Done", content_type="text/html",
+        )
+    )
+    assert {a.article_id for a in catalog.unextracted()} == {"2"}
+
+
+def test_unextracted_empty_when_all_extracted(catalog: Catalog) -> None:
+    catalog.put(_article("a", "1"))
+    catalog.update_extraction(
+        Article(
+            feed_id="a", article_id="1", title="T", link="https://e.com/1",
+            extracted_text="# Done", content_type="text/html",
+        )
+    )
+    assert catalog.unextracted() == []
+
+
 # --- Article stays tag-free -------------------------------------------------
 
 
@@ -228,8 +274,8 @@ def test_sqlite_malformed_article_row_raises(tmp_path: Path) -> None:
     conn = sqlite3.connect(db)
     conn.executescript(SCHEMA)
     conn.execute(
-        "INSERT INTO articles VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("a", "1", "T", "https://e.com/1", "s", "not-a-datetime", "also-bad"),
+        "INSERT INTO articles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("a", "1", "T", "https://e.com/1", "s", "not-a-datetime", "also-bad", "", ""),
     )
     conn.commit()
     conn.close()
@@ -246,8 +292,8 @@ def test_sqlite_malformed_classification_row_raises(tmp_path: Path) -> None:
     conn = sqlite3.connect(db)
     conn.executescript(SCHEMA)
     conn.execute(
-        "INSERT INTO articles VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("a", "1", "T", "https://e.com/1", "s", None, "2025-11-24T12:00:00+00:00"),
+        "INSERT INTO articles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("a", "1", "T", "https://e.com/1", "s", None, "2025-11-24T12:00:00+00:00", "", ""),
     )
     conn.execute(
         "INSERT INTO classifications VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -270,6 +316,46 @@ def test_sqlite_first_write_creates_parent_dirs(tmp_path: Path) -> None:
     db = tmp_path / "sub" / "sigops.db"
     SqliteCatalog(db).put(_article())
     assert db.exists()
+
+
+def test_sqlite_migrates_old_db_without_extraction_columns(tmp_path: Path) -> None:
+    import sqlite3
+
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE articles (
+          feed_id      TEXT NOT NULL,
+          article_id   TEXT NOT NULL,
+          title        TEXT NOT NULL,
+          link         TEXT NOT NULL,
+          summary      TEXT NOT NULL DEFAULT '',
+          published_at TEXT,
+          fetched_at   TEXT NOT NULL,
+          PRIMARY KEY (feed_id, article_id)
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO articles VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("a", "1", "T", "https://e.com/1", "s", None, "2025-11-24T12:00:00+00:00"),
+    )
+    conn.commit()
+    conn.close()
+    catalog = SqliteCatalog(db)
+    got = catalog.get("a", "1")
+    assert got is not None
+    assert got.extracted_text == ""
+    catalog.update_extraction(
+        Article(
+            feed_id="a", article_id="1", title="T", link="https://e.com/1",
+            extracted_text="# Hello", content_type="text/html",
+        )
+    )
+    got = catalog.get("a", "1")
+    assert got is not None
+    assert got.extracted_text == "# Hello"
 
 
 def test_default_path_is_gitignored_state_db() -> None:

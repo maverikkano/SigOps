@@ -79,3 +79,32 @@ RSS_ONE_NEW_ITEM = b"""<?xml version="1.0" encoding="UTF-8"?>
   </channel>
 </rss>
 """
+
+ARTICLE_HTML = b"""<!DOCTYPE html>
+<html>
+<head><title>LLM breakthrough</title><script>var x = 1;</script>
+<style>.nav { color: red; }</style></head>
+<body>
+<nav><ul><li>Home</li><li>About</li><li>Contact</li></ul></nav>
+<header><div class="ad">Buy now!</div></header>
+<article>
+<h1>New LLM breakthrough</h1>
+<p>A new model for code generation was released today. It scores highly on
+benchmarks for Python, TypeScript, and Rust, with improvements across
+every major evaluation suite used by the research community.</p>
+<h2>What changed</h2>
+<ul><li>Faster inference</li><li>Longer context</li></ul>
+<p>Researchers say the gains come from better data curation and a new
+training objective that rewards careful reasoning over memorization.</p>
+</article>
+<footer><p>Copyright 2025. All rights reserved.</p></footer>
+</body>
+</html>
+"""
+
+NEAR_EMPTY_HTML = b"""<!DOCTYPE html>
+<html><head><title>Paywall</title></head>
+<body><nav>Home</nav><p>Subscribe to continue reading.</p></body></html>
+"""
+
+PDF_BYTES = b"%PDF-1.4 fake pdf content, not html at all"

@@ -10,6 +10,7 @@ dependencies = [
     "feedparser>=6.0",
     "typesafe-sdk>=0.7.5",
     "python-dotenv>=1.2.4",
+    "trafilatura>=2.4.0",
 ]
 
 [dependency-groups]
