@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+from sigops import chunking
 from sigops.catalog import Catalog, CatalogError, SqliteCatalog
 from sigops.classifier import (
     DEFAULT_TAGS_PATH,
@@ -24,6 +25,8 @@ from sigops.fetcher import FeedFetcher
 from sigops.ingestor import Ingestor
 from sigops.models import (
     ArticleFailure,
+    Chunk,
+    ChunkFailure,
     Classification,
     ClassificationFailure,
     ExtractionFailure,
@@ -51,22 +54,34 @@ class ExtractResult(BaseModel):
     failures: list[ExtractionFailure] = Field(default_factory=list)
 
 
-class PipelineResult(BaseModel):
-    """Outcome of one end-to-end pipeline run (`POST /run`).
+class ChunkIndexResult(BaseModel):
+    """Outcome of one chunk & index run."""
 
-    The user-facing entry point. Aggregates every stage run so far;
-    forthcoming stages append their own fields here.
+    chunks: list[Chunk] = Field(default_factory=list)
+    failures: list[ChunkFailure] = Field(default_factory=list)
+
+
+class StageCounts(BaseModel):
+    """Success/failure counts for one pipeline stage. No payloads."""
+
+    succeeded: int = 0
+    failed: int = 0
+
+
+class PipelineResult(BaseModel):
+    """Counts-only outcome of one end-to-end pipeline run (`POST /run`).
+
+    The user-facing entry point. Carries per-stage success/failure
+    counts, never the underlying articles, judgments, or chunks -- those
+    live in the catalog. Detail endpoints (/ingest, /extract, /classify,
+    /chunk_index) keep returning full payloads for debugging.
     """
 
-    articles: list = Field(default_factory=list)
-    failures: list[FeedFailure] = Field(default_factory=list)
-    article_failures: list[ArticleFailure] = Field(default_factory=list)
-    extractions: list = Field(default_factory=list)
-    extraction_failures: list[ExtractionFailure] = Field(default_factory=list)
-    judgments: list[Classification] = Field(default_factory=list)
-    classification_failures: list[ClassificationFailure] = Field(
-        default_factory=list
-    )
+    ingest_new: int = 0
+    ingest_failures: StageCounts = Field(default_factory=StageCounts)
+    extraction: StageCounts = Field(default_factory=StageCounts)
+    classification: StageCounts = Field(default_factory=StageCounts)
+    chunk_index: StageCounts = Field(default_factory=StageCounts)
 
 
 def run_ingest(feeds_path: Path, catalog: Catalog) -> IngestionResult:
@@ -117,6 +132,39 @@ def run_classify(
         catalog, catalog.unjudged(), vocabulary, judge
     )
     return ClassifyResult(judgments=judgments, failures=failures)
+
+
+def run_chunk_index(catalog: Catalog) -> ChunkIndexResult:
+    """Chunk every unchunked article and persist the set. Pure logic, no I/O."""
+    chunks: list[Chunk] = []
+    failures: list[ChunkFailure] = []
+    for article in catalog.unchunked():
+        try:
+            made = chunking.chunk_article(article)
+        except Exception as e:  # noqa: BLE001 - chunker bugs must not abort the run
+            failures.append(
+                ChunkFailure(
+                    feed_id=article.feed_id,
+                    article_id=article.article_id,
+                    reason=str(e),
+                )
+            )
+            continue
+        if not made:
+            continue
+        try:
+            catalog.put_chunks(made)
+        except CatalogError as e:
+            failures.append(
+                ChunkFailure(
+                    feed_id=article.feed_id,
+                    article_id=article.article_id,
+                    reason=str(e),
+                )
+            )
+            continue
+        chunks.extend(made)
+    return ChunkIndexResult(chunks=chunks, failures=failures)
 
 
 def create_app(
@@ -187,15 +235,33 @@ def create_app(
             len(classification.judgments),
             len(classification.failures),
         )
+        started = time.monotonic()
+        chunk_index = run_chunk_index(active_catalog)
+        log.info(
+            "chunk_index done in %.1fs: %d chunks, %d chunk failures",
+            time.monotonic() - started,
+            len(chunk_index.chunks),
+            len(chunk_index.failures),
+        )
         log.info("run finished")
         return PipelineResult(
-            articles=ingestion.articles,
-            failures=ingestion.failures,
-            article_failures=ingestion.article_failures,
-            extractions=extraction.articles,
-            extraction_failures=extraction.failures,
-            judgments=classification.judgments,
-            classification_failures=classification.failures,
+            ingest_new=len(ingestion.articles),
+            ingest_failures=StageCounts(
+                succeeded=0,
+                failed=len(ingestion.failures) + len(ingestion.article_failures),
+            ),
+            extraction=StageCounts(
+                succeeded=len(extraction.articles),
+                failed=len(extraction.failures),
+            ),
+            classification=StageCounts(
+                succeeded=len(classification.judgments),
+                failed=len(classification.failures),
+            ),
+            chunk_index=StageCounts(
+                succeeded=len(chunk_index.chunks),
+                failed=len(chunk_index.failures),
+            ),
         )
 
     @app.get("/feeds", response_model=list[FeedSource])
@@ -217,6 +283,11 @@ def create_app(
     def classify() -> ClassifyResult:
         """Judge every unjudged cataloged article. Standalone stage endpoint."""
         return run_classify(_catalog(), judge or JevJudge(), tags_path)
+
+    @app.post("/chunk_index", response_model=ChunkIndexResult)
+    def chunk_index() -> ChunkIndexResult:
+        """Chunk every unchunked article. Standalone stage endpoint."""
+        return run_chunk_index(_catalog())
 
     return app
 
