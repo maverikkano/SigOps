@@ -16,6 +16,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=6.0",
 ]
 
 [build-system]
@@ -28,3 +29,4 @@ packages = ["src/sigops"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "--cov=sigops --cov-report=term-missing"

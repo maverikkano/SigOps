@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from sigops.models import Article, Classification
+from sigops.models import Article, Chunk, ChunkKind, Classification
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "state" / "sigops.db"
 """Default SQLite file. Outside the package tree; gitignored, disposable."""
@@ -55,6 +55,19 @@ CREATE TABLE IF NOT EXISTS classifications (
   judge_model   TEXT NOT NULL,
   judged_at     TEXT NOT NULL,
   PRIMARY KEY (feed_id, article_id),
+  FOREIGN KEY (feed_id, article_id) REFERENCES articles(feed_id, article_id)
+);
+
+CREATE TABLE IF NOT EXISTS chunks (
+  feed_id      TEXT NOT NULL,
+  article_id   TEXT NOT NULL,
+  pos          INTEGER NOT NULL,
+  kind         TEXT NOT NULL,
+  content      TEXT NOT NULL,
+  source_ref   TEXT NOT NULL DEFAULT '',
+  content_hash TEXT NOT NULL DEFAULT '',
+  created_at   TEXT NOT NULL,
+  PRIMARY KEY (feed_id, article_id, pos),
   FOREIGN KEY (feed_id, article_id) REFERENCES articles(feed_id, article_id)
 );
 """
@@ -156,6 +169,30 @@ class Catalog(Protocol):
         """
         ...
 
+    def put_chunks(self, chunks: list[Chunk]) -> None:
+        """Write the chunk set for one article. Write-once per (feed, id, pos).
+
+        Requires the article row to exist; raises CatalogError otherwise.
+        Re-chunking the same article must not duplicate rows.
+        """
+        ...
+
+    def get_chunks(self, feed_id: str, article_id: str) -> list[Chunk]:
+        """Return chunks for `(feed_id, article_id)` ordered by pos.
+
+        Empty list when unchunked, never None. Raises CatalogError on a
+        malformed stored row.
+        """
+        ...
+
+    def unchunked(self) -> list[Article]:
+        """Return extracted articles with no chunk rows yet.
+
+        Empty list when everything extracted is chunked. The chunking
+        stage consumes this; re-chunk is explicit, never default.
+        """
+        ...
+
 
 def _decode_article_row(row: tuple) -> Article:
     try:
@@ -198,6 +235,34 @@ ARTICLE_COLUMNS = (
     " a.extracted_text, a.content_type"
 )
 """Article columns shared by every SELECT that decodes to Article."""
+
+
+def _decode_chunk_row(row: tuple) -> Chunk:
+    try:
+        feed_id, article_id, pos, kind, content, source_ref, content_hash, _created = row
+        if not all(isinstance(v, str) for v in (feed_id, article_id, content)):
+            raise CatalogError(f"malformed chunk row: wrong types: {row!r}")
+        if not isinstance(pos, int) or isinstance(pos, bool) or pos < 0:
+            raise CatalogError(f"malformed chunk pos: {pos!r}")
+        try:
+            chunk_kind = ChunkKind(kind)
+        except ValueError:
+            raise CatalogError(f"malformed chunk kind: {kind!r}") from None
+        if not isinstance(source_ref, str) or not isinstance(content_hash, str):
+            raise CatalogError(f"malformed chunk row: {row!r}")
+        return Chunk(
+            feed_id=feed_id,
+            article_id=article_id,
+            pos=pos,
+            kind=chunk_kind,
+            content=content,
+            source_ref=source_ref,
+            content_hash=content_hash,
+        )
+    except CatalogError:
+        raise
+    except Exception as e:
+        raise CatalogError(f"malformed chunk row: {row!r}: {e}") from e
 
 
 def _decode_classification_row(row: tuple) -> Classification:
@@ -575,6 +640,112 @@ class SqliteCatalog:
         except (sqlite3.Error, OSError) as e:
             raise CatalogError(f"catalog write failed: {e}") from e
 
+    def put_chunks(self, chunks: list[Chunk]) -> None:
+        """Write the chunk set for one article. Requires the article row."""
+        try:
+            if not chunks:
+                return
+            feed_id = chunks[0].feed_id
+            article_id = chunks[0].article_id
+            if any(
+                c.feed_id != feed_id or c.article_id != article_id
+                for c in chunks
+            ):
+                raise CatalogError("chunk set spans multiple articles")
+            if not self._is_memory():
+                Path(self._path).parent.mkdir(parents=True, exist_ok=True)
+            conn = self._open()
+            try:
+                self._ensure_schema(conn)
+                exists = conn.execute(
+                    "SELECT 1 FROM articles WHERE feed_id = ? AND article_id = ?",
+                    (feed_id, article_id),
+                ).fetchone()
+                if exists is None:
+                    raise CatalogError(
+                        f"no article row for ({feed_id!r}, {article_id!r})"
+                    )
+                created_at = datetime.now(timezone.utc).isoformat()
+                for pos, chunk in enumerate(chunks):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO chunks"
+                        " (feed_id, article_id, pos, kind, content,"
+                        " source_ref, content_hash, created_at)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            feed_id,
+                            article_id,
+                            pos,
+                            chunk.kind.value,
+                            chunk.content,
+                            chunk.source_ref,
+                            chunk.content_hash,
+                            created_at,
+                        ),
+                    )
+                conn.commit()
+            finally:
+                self._close(conn)
+        except CatalogError:
+            raise
+        except (sqlite3.Error, OSError) as e:
+            raise CatalogError(f"catalog write failed: {e}") from e
+
+    def get_chunks(self, feed_id: str, article_id: str) -> list[Chunk]:
+        """Return chunks for `(feed_id, article_id)` ordered by pos."""
+        try:
+            if not self._db_exists():
+                return []
+            conn = self._open()
+            try:
+                try:
+                    rows = conn.execute(
+                        "SELECT feed_id, article_id, pos, kind, content,"
+                        " source_ref, content_hash, created_at"
+                        " FROM chunks"
+                        " WHERE feed_id = ? AND article_id = ?"
+                        " ORDER BY pos",
+                        (feed_id, article_id),
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    return []
+                return [_decode_chunk_row(tuple(row)) for row in rows]
+            finally:
+                self._close(conn)
+        except CatalogError:
+            raise
+        except (sqlite3.Error, OSError) as e:
+            raise CatalogError(f"catalog read failed: {e}") from e
+
+    def unchunked(self) -> list[Article]:
+        """Return extracted articles with no chunk rows yet."""
+        try:
+            if not self._db_exists():
+                return []
+            conn = self._open()
+            try:
+                try:
+                    rows = conn.execute(
+                        f"SELECT {ARTICLE_COLUMNS}"
+                        " FROM articles a"
+                        " LEFT JOIN chunks c"
+                        " ON a.feed_id = c.feed_id"
+                        " AND a.article_id = c.article_id"
+                        " WHERE a.extracted_text != ''"
+                        " AND c.feed_id IS NULL"
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    return []
+                for row in rows:
+                    _decode_article_row(tuple(row))
+                return [_decode_article_row(tuple(row)) for row in rows]
+            finally:
+                self._close(conn)
+        except CatalogError:
+            raise
+        except (sqlite3.Error, OSError) as e:
+            raise CatalogError(f"catalog read failed: {e}") from e
+
 
 class MemoryCatalog:
     """In-memory Catalog fake for tests. Same Protocol semantics, no I/O."""
@@ -583,6 +754,7 @@ class MemoryCatalog:
         """Start empty. No path, no filesystem, no shared state."""
         self._articles: dict[tuple[str, str], Article] = {}
         self._judgments: dict[tuple[str, str], Classification] = {}
+        self._chunks: dict[tuple[str, str], list[Chunk]] = {}
 
     def put(self, article: Article) -> bool:
         """Store a copy; True if new, False if key existed (keep the first)."""
@@ -655,3 +827,42 @@ class MemoryCatalog:
         stored = self._articles[key]
         stored.extracted_text = article.extracted_text
         stored.content_type = article.content_type
+
+    def put_chunks(self, chunks: list[Chunk]) -> None:
+        """Write the chunk set for one article. Requires the article row."""
+        if not chunks:
+            return
+        feed_id = chunks[0].feed_id
+        article_id = chunks[0].article_id
+        if any(
+            c.feed_id != feed_id or c.article_id != article_id for c in chunks
+        ):
+            raise CatalogError("chunk set spans multiple articles")
+        key = (feed_id, article_id)
+        if key not in self._articles:
+            raise CatalogError(f"no article row for {key!r}")
+        if key in self._chunks:
+            return  # write-once: re-chunk must not duplicate rows
+        self._chunks[key] = [
+            chunk.model_copy(deep=True) for chunk in chunks
+        ]
+        for pos, chunk in enumerate(self._chunks[key]):
+            chunk.pos = pos
+
+    def get_chunks(self, feed_id: str, article_id: str) -> list[Chunk]:
+        """Return chunks for `(feed_id, article_id)` ordered by pos."""
+        return [
+            chunk.model_copy(deep=True)
+            for chunk in sorted(
+                self._chunks.get((feed_id, article_id), []),
+                key=lambda c: c.pos,
+            )
+        ]
+
+    def unchunked(self) -> list[Article]:
+        """Return extracted articles with no chunk rows yet."""
+        return [
+            article.model_copy(deep=True)
+            for key, article in self._articles.items()
+            if article.extracted_text and key not in self._chunks
+        ]

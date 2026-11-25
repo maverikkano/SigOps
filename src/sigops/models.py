@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel, Field
 
@@ -90,6 +91,45 @@ class ExtractionFailure(BaseModel):
     near-empty pages become a recorded failure per article, never an
     exception that ends the run. Mirrors ArticleFailure but for the
     extraction step rather than the catalog insert.
+    """
+
+    feed_id: str
+    article_id: str
+    reason: str
+
+
+class ChunkKind(str, Enum):
+    """Chunk content type. Text and images are never mixed in one chunk."""
+
+    TEXT = "text"
+    IMAGE = "image"
+
+
+class Chunk(BaseModel):
+    """One addressable unit of an extracted article. Write-once.
+
+    `pos` is document order (0-based). `content` holds the text excerpt
+    for TEXT chunks or the image src URL for IMAGE chunks. `source_ref`
+    locates the chunk in the source (heading-stack + char offset) so S5/S6
+    can cite it. `content_hash` is the sha256 of the article's
+    extracted_text at chunk time; a mismatch on re-read means re-chunk.
+    """
+
+    feed_id: str
+    article_id: str
+    pos: int = Field(ge=0)
+    kind: ChunkKind
+    content: str
+    source_ref: str = ""
+    content_hash: str = ""
+
+
+class ChunkFailure(BaseModel):
+    """An article that could not be chunked or recorded.
+
+    Failure isolation: one bad article never aborts the run. Mirrors
+    ArticleFailure but for the chunk/index step rather than the catalog
+    insert.
     """
 
     feed_id: str

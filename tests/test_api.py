@@ -202,9 +202,7 @@ def test_run_endpoint_runs_ingest_then_classify(tmp_path: Path) -> None:
     resp = client.post("/run")
     assert resp.status_code == 200
     body = resp.json()
-    assert len(body["judgments"]) == 1
-    assert body["judgments"][0]["tags"] == ["AI-LLM"]
-    assert body["classification_failures"] == []
+    assert body["classification"] == {"succeeded": 1, "failed": 0}
     assert catalog.get_classification("a", "1") is not None
 
 
@@ -288,6 +286,6 @@ def test_run_endpoint_extracts_before_classify(tmp_path: Path) -> None:
     resp = client.post("/run")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["extraction_failures"] == []
-    assert len(body["judgments"]) == 0  # no feeds configured beyond the file stub
+    assert body["extraction"] == {"succeeded": 0, "failed": 0}
+    assert body["classification"] == {"succeeded": 0, "failed": 0}  # no feeds beyond the file stub
     assert seen == [] or all(s == "# Fake" for s in seen)

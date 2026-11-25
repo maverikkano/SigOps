@@ -237,7 +237,7 @@ def classify_unjudged(
     judge: Judge,
     *,
     threshold: float = 0.7,
-) -> tuple[list[Classification], list[object]]:
+) -> tuple[list[Classification], list[ClassificationFailure]]:
     """Judge every article with no catalog judgment yet; write each back.
 
     Skips already-judged articles (re-judge is explicit, not default).

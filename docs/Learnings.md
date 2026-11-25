@@ -1,0 +1,14 @@
+# Chunk & Index (issue #8) — Decisions
+- Date: 2026-11-25. Chunking is addressing, not shrinking: purpose is provenance (summary -> source) and text/image separation, not fitting context windows (most RSS articles ~800-3000 words fit in one shot).
+- Strategy: structure-aware first (headings/paragraphs, tables + fenced code atomic), fixed-size sliding window with overlap fallback only for very long single paragraph (MAX_CHARS=2000, OVERLAP=150).
+- Splitting is pure + deterministic: same Markdown in -> same chunks out. No I/O, HTTP, LLM in splitter (SRP).
+- ✨ Schema: separate `chunks` table, NOT a JSON blob column on `articles`. PK (feed_id, article_id, pos), FK to articles. Rejected `<id>:<chunk_text>` JSON because: violates 1NF (N facts per cell), loses SQL ordering/filtering (ORDER BY pos, WHERE kind='image'), loses unchunked LEFT JOIN pattern consistent with unjudged/unextracted, all-or-nothing writes break per-chunk idempotency (INSERT OR IGNORE). Row-per-chunk costs ~3-5 rows/article, buys joinable address (feed_id, article_id, pos). 
+  - Refer to [GenAI / RAG Patterns with pgvector - Microsoft](https://github.com/microsoft/postgres-skills/blob/main/plugin/skills/postgresql-best-practices/references/postgresql-genai-rag.md)
+- Chunk address = (feed_id, article_id, pos, kind, source_ref, content_hash). source_ref = heading-path @ char-offset for S5/S6 citation. content_hash = sha256 of extracted_text at chunk time; mismatch means re-chunk.
+- Write-once semantics: INSERT OR IGNORE (SQLite), skip-if-present (memory). Re-chunk never duplicates. Requires parent article row else CatalogError.
+- unchunked() = extracted articles with zero chunk rows; ignores unextracted. Mirrors unjudged/unextracted stage-consumption pattern.
+- Index = positional record only (pos per article), not vector search. Real search deferred to Semantic Indexing (YAGNI).
+- Pipeline order: ingest -> extract -> classify -> chunk_index. Chunking after classify so ineligible articles never get chunk rows (cheaper). Tradeoff noted: S5 can then only see eligible articles.
+- API: POST /chunk_index standalone + cascaded in POST /run. run_chunk_index() chunks every unchunked, per-article ChunkFailure, never aborts (failure isolation like Extractor.extract_many / classify_unjudged).
+- Fix applied: classifier.py return type list[object] -> list[ClassificationFailure] (type error).
+- Env note: `uv run` broken in this env (cache lock permission); used `python3 -m pytest` against same .venv.
