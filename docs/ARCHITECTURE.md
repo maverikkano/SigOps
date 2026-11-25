@@ -18,9 +18,8 @@ Ingestion -> Catalog ->  Extraction -> Classification (Jev)  -> Chunk & Index (b
 | Ingestion | RSS feeds |
 | Catalog | Record every ingested article in a durable index keyed by feed and article id |
 | Classification | Classify if an incoming article is of interest based on the title & description into tags |
-| Persistence | Save eligible articles to file system/NAS/Blob storage |
 | Chunk & Index | Extract the article into chunks and index each chunk (text & images in separate chunks) |
-| Extraction | Identify images- graphs, tables, and other entities in the article and|
+| OCR | Identify images |
 | Summarization | Summarize the article into a chunk-wise summary |
 | Templatization (optional) | Create a summary document from a templete |
 | Symantic Indexing | Add key findings to a RAG based on the summary document |
